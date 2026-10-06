@@ -11,7 +11,7 @@ cabeceras = {
     "Content-Type": "application/json"
 }
 
-print("Conectando con la API para el proceso acumulativo...")
+print("Conectando con la API para el proceso acumulativo maestro...")
 
 try:
     # Descargar datos actuales de la API
@@ -19,7 +19,7 @@ try:
     respuesta.raise_for_status() 
     datos_json = respuesta.json()
     
-    print("¡Conexión exitosa! Analizando lotes activos...")
+    print("¡Conexión exitosa! Analizando bloques de lotes activos...")
 
     if isinstance(datos_json, dict):
         for clave, valor in datos_json.items():
@@ -46,36 +46,48 @@ try:
 
     # --- 3. LÓGICA INTELIGENTE DE COMPARACIÓN ---
     
-    # A. Obtenemos la lista de combinaciones (Granja y Lote) que vienen HOY en la API
-    # Usamos set() para tener una lista única sin repeticiones
+    # A. Combinaciones únicas (Granja y Lote) que vienen HOY en la API
     lotes_activos_api = set(zip(df['granja'].astype(str), df['lote'].astype(str)))
 
     # B. Buscamos qué granjas y lotes tenemos guardados en MySQL que sigan como 'ABIERTO'
     cursor.execute("SELECT DISTINCT granja, lote FROM tabla_acumulativa_lotes WHERE estado2 = 'ABIERTO';")
     lotes_en_base_datos = cursor.fetchall()
 
-    # C. COMPARACIÓN: Si un lote estaba 'ABIERTO' en MySQL pero YA NO VIENE en la API, lo cerramos
+    # C. COMPARACIÓN DE CIERRE: Si un lote estaba 'ABIERTO' pero YA NO VIENE en la API, lo cerramos definitivamente
     contador_cerrados = 0
     for granja_bd, lote_bd in lotes_en_base_datos:
         if (str(granja_bd), str(lote_bd)) not in lotes_activos_api:
-            # Esta orden busca todas las filas de ese lote en MySQL y les pone 'CERRADO'
             sql_cerrar = "UPDATE tabla_acumulativa_lotes SET estado2 = 'CERRADO' WHERE granja = %s AND lote = %s;"
             cursor.execute(sql_cerrar, (granja_bd, lote_bd))
             contador_cerrados += 1
 
     if contador_cerrados > 0:
-        print(f"-> Se identificaron y cerraron {contador_cerrados} lotes que ya no venían en la API.")
+        print(f"-> Se identificaron y cerraron {contador_cerrados} lotes antiguos en el histórico.")
     else:
-        print("-> Todos los lotes guardados siguen activos en la API.")
+        print("-> Todos los históricos cerrados permanecen protegidos.")
 
-    # D. INSERCIÓN: Insertamos las filas de la API como 'ABIERTO'
-    print("Guardando registros actuales de la API...")
+    # =========================================================================
+    # 🛡️ REEMPLAZO ESTRUCTURAL ABSOLUTO (RESET DE BLOQUE ACTIVO)
+    # =========================================================================
+    granjas_lotes_api_unicos = df[['granja', 'lote']].drop_duplicates()
+    
+    print("Aplicando reemplazo absoluto estructural. Purgando fantasmas transaccionales...")
+    for _, fila_reemplazo in granjas_lotes_api_unicos.iterrows():
+        sql_limpiar_bloque = """
+        DELETE FROM tabla_acumulativa_lotes 
+        WHERE granja = %s AND lote = %s;
+        """
+        cursor.execute(sql_limpiar_bloque, (str(fila_reemplazo['granja']), str(fila_reemplazo['lote'])))
+    # =========================================================================
+
+    # D. INSERCIÓN: Insertamos las filas frescas, vigentes y reales de la API
+    print("Poblation tabla acumulativa con la foto limpia del día...")
     
     def limpiar_vacio(valor, tipo):
-        if pd.isna(valor) or str(valor).strip() == '' or str(valor).strip().lower() == 'nat':
+        if pd.isna(valor) or str(valor).strip() == '' or str(valor).strip().lower() in ['nat', 'none', 'null']:
             return None
         try:
-            return tipo(valor)
+            return tipo(str(valor).strip())
         except:
             return None
 
@@ -114,8 +126,25 @@ try:
         )
         cursor.execute(sql_insertar, valores)
 
+    # =========================================================================
+    # 🍒 LA CEREZA DEL PASTEL: CANDADO DE UNIFICACIÓN DE CIERRES RETROACTIVOS
+    # =========================================================================
+    print("Sincronizando estados de cierre para registros rezagados...")
+    sql_unificar_fantasmas = """
+    UPDATE tabla_acumulativa_lotes t
+    INNER JOIN (
+        SELECT DISTINCT granja, lote 
+        FROM tabla_acumulativa_lotes 
+        WHERE estado2 = 'CERRADO'
+    ) c ON t.granja = c.granja AND t.lote = c.lote
+    SET t.estado2 = 'CERRADO'
+    WHERE t.estado2 = 'ABIERTO';
+    """
+    cursor.execute(sql_unificar_fantasmas)
+    # =========================================================================
+
     conexion.commit()
-    print("\n--- ¡TABLA ACUMULATIVA ACTUALIZADA CON ÉXITO EN MYSQL! ---")
+    print("\n--- ¡TABLA ACUMULATIVA RESUMIDA, SANEADA Y UNIFICADA CON ÉXITO EN MYSQL! ---")
 
 except requests.exceptions.HTTPError as error_api:
     print(f"\n❌ Error al comunicarse con la API: {error_api}")
@@ -125,3 +154,4 @@ finally:
     if 'conexion' in locals() and conexion.is_connected():
         cursor.close()
         conexion.close()
+
