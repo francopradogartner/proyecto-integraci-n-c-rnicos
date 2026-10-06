@@ -1,10 +1,10 @@
-# Sistema de Auditoría y Consolidación de Hechos Avícolas 🐔📊
+# Proyecto de integración para informes de indicadores técnicos en Power BI
 
 Este proyecto implementa un Data Pipeline automatizada y una arquitectura analítica híbrida para la extracción, limpieza, control de calidad y consolidación gerencial de la información transaccional de una operación de engorde avícola. 
 
 El ecosistema está diseñado para mitigar anomalías operativas de origen (registros duplicados, ediciones retroactivas y distorsiones ortográficas) y gobernar la transición tecnológica hacia la automatización total de reportes.
 
-## 🚀 Arquitectura del Ecosistema Analítico
+##  Arquitectura del Ecosistema Analítico
 
 La solución en producción se compone de un ecosistema de **tres informes interconectados** en Power BI Service (Nube) y Desktop, alimentados por múltiples fuentes integradas:
 
@@ -29,11 +29,11 @@ Monitorea la operación en tiempo real mediante dos orígenes de datos:
 
 ### 3. PBI Histórico de Cierres (Lotes Cerrados)
 Consolida el cierre definitivo de ciclos productivos a través de tres fuentes combinadas:
-* **Capa MySQL (`vista_hechos_app`):** Carga los cierres procesados bajo las 11 capas CTE.
+* **Capa MySQL (`vista_hechos_app`):** Carga los closures procesados bajo las 11 capas CTE.
 * **Excel Históricos de Cierre:** Resguarda la data histórica de ciclos pasados. Su actualización manual cesará una vez que la fase de auditoría actual valide el funcionamiento óptimo de la vista de hechos, quedando este archivo estático como soporte del histórico heredado.
-* **API ERP Siesa:** Conexión directa desde Power BI al sistema ERP para complementar la información operativa de los cierres sin pasar por almacenamiento intermedio.
+* **API ERP Siesa:** Conexión directa desde Power BI al sistema ERP para complementar la información operativa de los closures sin pasar por almacenamiento intermedio.
 
-## 🛠️ Arquitectura de pipeline Local (MySQL / Python)
+## Arquitectura de pipeline Local (MySQL / Python)
 
 Para la sección de lotes automatizados, el pipeline se ejecuta en cascada a través de `actualizar_todo.bat`:
 1. **`proceso_api.py`:** Descarga los datos de la API y aplica desinfección nativa en memoria (recorte de nulos y `.strip()` de texto) para poblar la aduana.
@@ -41,20 +41,25 @@ Para la sección de lotes automatizados, el pipeline se ejecuta en cascada a tra
 3. **`proceso_acumulativo.py`:** Algoritmo de auto-corrección por bloque. Si un operario edita o elimina un registro en la granja, Python detecta el lote activo, remueve su bloque viejo en la base de datos y lo sobreescribe con la foto vigente del día, evitando duplicidades.
 4. **`vista_historica_lotes`:** Escudo ortográfico que destruye en tiempo real los espacios fantasmas de la base de datos antes de enviar la llave unificada (`Identificador`) a la vista de hechos analítica.
 
+## Mitigación de Tolerancia a Fallas en el Entorno Operativo (Vida Real)
 
-## 🛠️ Tecnologías Utilizadas
+El sistema integra algoritmos específicos diseñados para absorber las fricciones transaccionales nativas del trabajo de campo:
+* **Anclaje de Hitos Temporales Rígidos:** En caso de que un operario omita o reporte tarde el registro del día de cierre de semana (ej. día 21), la capa de proyección de `vista_hechos_app` intercepta la anomalía mediante lógica condicional, forzando de manera estricta los hitos múltiplos de 7 (7, 14, 21, 28) y alineando la llave primaria simétrica (`Identificador` por `edad`) para asegurar que el enlace analítico cruce al 100% en Power BI.
+* **Sincronización Asíncrona :** Ante eventos de intermitencia de red móvil en los galpones, donde un lote emite la orden de cierre y posteriormente transmite datos rezagados que entran a desatiempo con estado `'ABIERTO'`, el script de Python ejecuta una consulta de actualización unificadora en la fase final de la inserción (`UPDATE t INNER JOIN ...`). Esto obliga a los registros huérfanos a heredar el estado `'CERRADO'` del bloque principal, garantizando consistencia absoluta y cero pérdida de información transaccional.
+
+## Tecnologías Utilizadas
 * **Base de Datos:** MySQL Server (CTEs Avanzadas, Window Functions, Stored Procedures).
 * **Lenguaje:** Python 3.x (Pandas, Requests, MySQL Connector).
 * **Orígenes No Relacionales:** REST APIs (App + ERP Siesa) y Microsoft Excel (Modelos de Contingencia).
 * **Consumo:** Power BI Service / Desktop.
 
-* ## 🔄 Flujo de Ejecución Diario y Consolidación (Paso a Paso)
+## Flujo de Ejecución Diario y Consolidación (Paso a Paso)
 
 Para garantizar la consistencia analítica y la eliminación de datos huérfanos o duplicados, la rutina diaria sigue una secuencia cronológica rígida automatizada por el archivo de procesamiento por lotes:
 
 1. **Extracción Directa desde la API:** Al ejecutar `actualizar_todo.bat`, el sistema invoca en primer lugar a `proceso_api.py` para descargar la información fresca y depositarla en `tabla_calidad_api`.
 2. **Activación del Escudo de Control de Calidad:** Se dispara el procedimiento `CALL sp_validar_y_transferir_lotes();`. Si detecta anomalías biológicas críticas (múltiples lotes activos por granja), aborta la ejecución para proteger el histórico. Si la data está limpia, aplica un formateo `TRIM` riguroso a `granja` y `nombre_galpon` y actualiza la `tabla_usuarios`.
-3. **Consolidación Dinámica por Bloques:** Se ejecuta `proceso_acumulativo.py`. Python identifica los lotes activos del día, ejecuta un `DELETE` únicamente sobre sus registros en estado `'ABIERTO'` en la `tabla_acumulativa_lotes`, y sobreescribe la foto corregida vigente de la API. Si un lote activo deja de reportarse (ya no viene en la API), se actualiza automáticamente a estado `'CERRADO'`.
+3. **Consolidación Dinámica por Bloques:** Se ejecuta `proceso_acumulativo.py`. Python identifica los lotes activos del día, ejecuta un `DELETE` completo sobre ese bloque en la `tabla_acumulativa_lotes`, y sobreescribe la foto corregida vigente de la API. Si un lote activo deja de reportarse (ya no viene en la API), se actualiza automáticamente a estado `'CERRADO'`.
 4. **Cálculos Analíticos en Tiempo Real:** Al ser consultadas, las vistas analíticas procesan la data de forma instantánea. `vista_historica_lotes` de-duplica y unifica el identificador espejo del galpón, y la vista maestra `vista_hechos_app` calcula saldos poblacionales, traslados, congelando pesajes fijos y mortalidades acumuladas.
 
 ---
@@ -88,6 +93,7 @@ Siga estos pasos exactos para configurar el entorno y poner en marcha la soluci�
    * **`Inicio.pbix`**
    * **`Lotes abiertos.pbix`**
    * **`Lotes cerrados.pbix`**
+   * **`Lotes abiertos_coordina.pbix`**
 3. En cada uno de los archivos abiertos, diríjase a la barra superior, haga clic en la flecha de *Transformar datos* ➔ **Configuración de origen de datos**.
 4. Seleccione la conexión de base de datos y haga clic en **Cambiar origen**, apuntando el servidor a la base de datos local creada (`localhost` / base de datos: `data_app_carnicos`). Sincronice las credenciales de seguridad de la base de datos con su usuario `root` y contraseña del servidor.
 5. De igual manera, identifique los orígenes de archivos planos complementarios y actualice sus rutas apuntando al directorio o carpeta de red local donde se resguarden físicamente los archivos de **Excel** maestros (*Tabla de Indicadores* e *Históricos de Cierre*). Presione **Aplicar cambios**.
